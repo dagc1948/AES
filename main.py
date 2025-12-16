@@ -15,15 +15,84 @@ class AdvancedEquationSolver:
         self.variables = set()
         self.timeout = 10  # segundos por método
         self.executor = ThreadPoolExecutor(max_workers=3)
+        self.angle_mode = "rad"  # Por defecto radianes
+        print(f"Solver inicializado en modo: {self.angle_mode}")
+        
+    def set_angle_mode(self, mode: str):
+        """Establece el modo de ángulo"""
+        self.angle_mode = mode
+        print(f"Modo de ángulo cambiado a: {self.angle_mode}")
         
     def parse_equation(self, eq_text: str):
         """Convierte una ecuación en formato string a expresión sympy"""
         eq_text = eq_text.strip()
+        
+        # Reemplazar símbolos especiales
         eq_text = eq_text.replace('^', '**')
         
-        # Manejar multiplicación implícita
+        # NO redefinir π en modo grados - mantener π como constante matemática
+        eq_text = eq_text.replace('π', 'pi')
+        eq_text = eq_text.replace('∞', 'inf')
+        
+        # Lista de funciones matemáticas para evitar multiplicación incorrecta
+        math_functions = [
+            'sin', 'cos', 'tan', 'cot', 'sec', 'csc',
+            'asin', 'acos', 'atan', 'acot', 'asec', 'acsc',
+            'sinh', 'cosh', 'tanh', 'coth', 'sech', 'csch',
+            'asinh', 'acosh', 'atanh', 'acoth', 'asech', 'acsch',
+            'exp', 'log', 'ln', 'log10', 'log2',
+            'sqrt', 'cbrt', 'abs', 'gamma', 'factorial',
+            'erf', 'erfc', 'floor', 'ceil', 'round',
+            'min', 'max', 'diff', 'integral', 'sum', 'product'
+        ]
+        
+        # Reemplazar funciones con marcadores temporales
+        temp_markers = {}
+        for i, func in enumerate(math_functions):
+            marker = f"__F_{i}_"
+            pattern = r'\b' + re.escape(func) + r'\s*\('
+            eq_text = re.sub(pattern, marker + '(', eq_text, flags=re.IGNORECASE)
+            temp_markers[marker] = func
+        
+        # Manejar notación de derivadas
+        eq_text = re.sub(r"([a-zA-Z])'", r"diff(\1)", eq_text)
+        eq_text = re.sub(r"([a-zA-Z])''", r"diff(\1, 2)", eq_text)
+        eq_text = re.sub(r"([a-zA-Z])'''", r"diff(\1, 3)", eq_text)
+        
+        # Manejar multiplicación implícita CORREGIDO
+        # 1. Entre número y variable: 2x -> 2*x
         eq_text = re.sub(r'(\d)([a-zA-Z])', r'\1*\2', eq_text)
+        # 2. Entre variable y número: x2 -> x*2
         eq_text = re.sub(r'([a-zA-Z])(\d)', r'\1*\2', eq_text)
+        # 3. Entre variable y paréntesis: x( -> x*( 
+        eq_text = re.sub(r'([a-zA-Z])(\()', r'\1*\2', eq_text)
+        # 4. Entre paréntesis y variable: )x -> )*x
+        eq_text = re.sub(r'(\))([a-zA-Z])', r'\1*\2', eq_text)
+        # 5. Entre número y paréntesis: 2( -> 2*( 
+        eq_text = re.sub(r'(\d)(\()', r'\1*\2', eq_text)
+        # 6. Entre paréntesis y número: )2 -> )*2
+        eq_text = re.sub(r'(\))(\d)', r'\1*\2', eq_text)
+        
+        # Restaurar funciones
+        for marker, func in temp_markers.items():
+            eq_text = eq_text.replace(marker, func)
+        
+        # **CORRECCIÓN CRÍTICA: Transformar números en funciones trigonométricas en modo DEG**
+        if self.angle_mode == "deg":
+            # Identificar funciones trigonométricas directas
+            trig_direct = ['sin', 'cos', 'tan', 'cot', 'sec', 'csc']
+            
+            for func in trig_direct:
+                # Patrón para encontrar funciones trigonométricas con números
+                pattern = r'\b(' + func + r')\s*\(\s*([+-]?\d+(?:\.\d*)?|\.\d+)\s*\)'
+                
+                def replace_with_degrees(match):
+                    """Reemplaza sin(30) por sin(30*pi/180) en modo grados"""
+                    func_name = match.group(1)
+                    number = match.group(2)
+                    return f'{func_name}({number}*pi/180)'
+                
+                eq_text = re.sub(pattern, replace_with_degrees, eq_text, flags=re.IGNORECASE)
         
         # Manejar igualdad
         if '=' in eq_text:
@@ -31,45 +100,94 @@ class AdvancedEquationSolver:
             expr = f"({lhs.strip()}) - ({rhs.strip()})"
         else:
             expr = eq_text
-            
-        return sp.sympify(expr)
+        
+        try:
+            # Parsear la expresión con sympy
+            return sp.sympify(expr, locals={
+                'sin': sp.sin, 'cos': sp.cos, 'tan': sp.tan,
+                'asin': sp.asin, 'acos': sp.acos, 'atan': sp.atan,
+                'sinh': sp.sinh, 'cosh': sp.cosh, 'tanh': sp.tanh,
+                'asinh': sp.asinh, 'acosh': sp.acosh, 'atanh': sp.atanh,
+                'exp': sp.exp, 'log': sp.log, 'ln': sp.log,
+                'sqrt': sp.sqrt, 'abs': sp.Abs,
+                'floor': sp.floor, 'ceil': sp.ceiling,
+                'gamma': sp.gamma, 'factorial': sp.factorial,
+                'erf': sp.erf, 'erfc': sp.erfc,
+                'pi': sp.pi, 'e': sp.E, 'inf': sp.oo,
+                'cot': sp.cot, 'sec': sp.sec, 'csc': sp.csc,
+                'acot': sp.acot, 'asec': sp.asec, 'acsc': sp.acsc,
+                'coth': sp.coth, 'sech': sp.sech, 'csch': sp.csch,
+                'acoth': sp.acoth, 'asech': sp.asech, 'acsch': sp.acsch,
+                'log10': lambda x: sp.log(x, 10),
+                'log2': lambda x: sp.log(x, 2),
+                'cbrt': lambda x: x**sp.Rational(1, 3),
+                'pow': sp.Pow,
+                'diff': lambda f, x, n=1: sp.diff(f, x, n) if n > 0 else f,
+                'integral': lambda f, x: sp.integrate(f, x),
+                'sum': lambda f, var, a, b: sp.summation(f, (var, a, b)),
+                'product': lambda f, var, a, b: sp.product(f, (var, a, b)),
+                'min': sp.Min, 'max': sp.Max,
+                'sign': sp.sign
+            })
+        except Exception as e:
+            raise ValueError(f"No se pudo parsear la ecuación: {expr}\nError: {e}")
     
     def generate_initial_guesses(self, n_vars: int, n_guesses: int = 10):
         """Genera puntos iniciales para métodos numéricos"""
         guesses = []
         
-        # Puntos fijos comunes
-        fixed_guesses = [
-            [0.0] * n_vars,
-            [1.0] * n_vars,
-            [-1.0] * n_vars,
-            [0.5] * n_vars,
-            [-0.5] * n_vars,
-        ]
+        # Puntos fijos comunes - ajustar según modo de ángulo
+        if self.angle_mode == "rad":
+            fixed_guesses = [
+                [0.0] * n_vars,
+                [1.0] * n_vars,
+                [-1.0] * n_vars,
+                [0.5] * n_vars,
+                [-0.5] * n_vars,
+                [np.pi] * n_vars,
+                [np.pi/2] * n_vars,
+            ]
+            low, high = -5, 5
+        else:
+            # Para grados, valores típicos en grados
+            fixed_guesses = [
+                [0.0] * n_vars,
+                [90.0] * n_vars,
+                [180.0] * n_vars,
+                [270.0] * n_vars,
+                [360.0] * n_vars,
+                [-90.0] * n_vars,
+                [-180.0] * n_vars,
+                [45.0] * n_vars,
+                [135.0] * n_vars,
+            ]
+            low, high = -360, 360
         
         guesses.extend(fixed_guesses)
         
         # Puntos aleatorios
         for _ in range(n_guesses - len(fixed_guesses)):
-            guess = np.random.uniform(-5, 5, n_vars).tolist()
+            guess = np.random.uniform(low, high, n_vars).tolist()
             guesses.append(guess)
             
-        # Puntos basados en distribuciones
-        for scale in [0.1, 2.0, 10.0]:
-            guess = np.random.randn(n_vars) * scale
+        # Puntos basados en distribuciones normales
+        for scale in [0.1, 0.5, 1.0, 2.0]:
+            guess = np.random.randn(n_vars) * scale * (10 if self.angle_mode == "rad" else 90)
             guesses.append(guess.tolist())
             
         return guesses
     
     def solve_system(self, equations_text: list):
-        """Resuelve el sistema de ecuaciones usando múltiples métodos en orden de consumo computacional"""
+        """Resuelve el sistema de ecuaciones usando múltiples métodos"""
         try:
+            print(f"\n=== INICIANDO RESOLUCIÓN EN MODO {self.angle_mode.upper()} ===")
             self.equations = []
             self.variables = set()
             
             # Parsear ecuaciones
             for eq_text in equations_text:
                 if eq_text.strip():
+                    print(f"Parseando ecuación en modo {self.angle_mode}: {eq_text}")
                     expr = self.parse_equation(eq_text)
                     self.equations.append(expr)
                     self.variables.update({str(s) for s in expr.free_symbols})
@@ -78,58 +196,149 @@ class AdvancedEquationSolver:
                 return {"error": "No hay ecuaciones"}
             
             if not self.variables:
-                return {"error": "No hay variables"}
+                return {"error": "No hay variables para resolver"}
             
             var_list = sorted(list(self.variables))
+            print(f"Variables detectadas: {var_list}")
+            print(f"Número de ecuaciones: {len(self.equations)}")
             
             # Preparar funciones para métodos numéricos
             var_symbols = [sp.Symbol(v) for v in var_list]
-            numpy_funcs = [sp.lambdify(var_symbols, eq, ('numpy', 'math')) for eq in self.equations]
+            
+            # Crear funciones lambda con manejo de funciones especiales y modo ángulo
+            numpy_funcs = []
+            for eq in self.equations:
+                try:
+                    # Convertir a función numérica
+                    if self.angle_mode == "rad":
+                        # Modo radianes - usar funciones normales
+                        func = sp.lambdify(var_symbols, eq, 
+                                          modules=['numpy', 'math', 
+                                                   {'sin': np.sin, 'cos': np.cos, 'tan': np.tan,
+                                                    'asin': np.arcsin, 'acos': np.arccos, 'atan': np.arctan,
+                                                    'sinh': np.sinh, 'cosh': np.cosh, 'tanh': np.tanh,
+                                                    'asinh': np.arcsinh, 'acosh': np.arccosh, 'atanh': np.arctanh,
+                                                    'exp': np.exp, 'log': np.log, 'log10': np.log10,
+                                                    'log2': lambda x: np.log2(x) if x > 0 else np.nan,
+                                                    'sqrt': np.sqrt, 'abs': np.abs, 'pi': np.pi, 'e': np.e,
+                                                    'cot': lambda x: 1/np.tan(x) if np.tan(x) != 0 else np.nan,
+                                                    'sec': lambda x: 1/np.cos(x) if np.cos(x) != 0 else np.nan,
+                                                    'csc': lambda x: 1/np.sin(x) if np.sin(x) != 0 else np.nan,
+                                                    'coth': lambda x: 1/np.tanh(x) if np.tanh(x) != 0 else np.nan,
+                                                    'sech': lambda x: 1/np.cosh(x),
+                                                    'csch': lambda x: 1/np.sinh(x) if np.sinh(x) != 0 else np.nan,
+                                                    'acot': lambda x: np.pi/2 - np.arctan(x) if x != 0 else np.pi/2,
+                                                    'asec': lambda x: np.arccos(1/x) if x != 0 else np.nan,
+                                                    'acsc': lambda x: np.arcsin(1/x) if x != 0 else np.nan,
+                                                    'acoth': lambda x: 0.5 * np.log((x+1)/(x-1)) if abs(x) > 1 else np.nan,
+                                                    'asech': lambda x: np.log((1+np.sqrt(1-x*x))/x) if 0 < x <= 1 else np.nan,
+                                                    'acsch': lambda x: np.log((1+np.sqrt(1+x*x))/x) if x != 0 else np.nan,
+                                                    'floor': np.floor, 'ceil': np.ceil, 'round': np.round,
+                                                    'cbrt': lambda x: np.cbrt(x),
+                                                    'gamma': lambda x: float(sp.gamma(float(x))) if x > 0 else np.nan,
+                                                    'factorial': lambda x: np.math.factorial(int(x)) if x >= 0 and float(x).is_integer() else np.nan,
+                                                    'min': np.minimum, 'max': np.maximum,
+                                                    'sign': np.sign}])
+                    else:
+                        # **CORRECCIÓN: En modo grados, usar funciones que conviertan entrada de grados a radianes**
+                        # Pero las constantes ya fueron convertidas en parse_equation, así que usamos funciones normales
+                        func = sp.lambdify(var_symbols, eq, 
+                                          modules=['numpy', 'math', 
+                                                   {'sin': np.sin,  # Ya viene convertido a radianes
+                                                    'cos': np.cos,
+                                                    'tan': np.tan,
+                                                    'asin': lambda x: np.rad2deg(np.arcsin(x)) if -1 <= x <= 1 else np.nan,
+                                                    'acos': lambda x: np.rad2deg(np.arccos(x)) if -1 <= x <= 1 else np.nan,
+                                                    'atan': lambda x: np.rad2deg(np.arctan(x)),
+                                                    'atan2': lambda y, x: np.rad2deg(np.arctan2(y, x)),
+                                                    'sinh': np.sinh, 'cosh': np.cosh, 'tanh': np.tanh,
+                                                    'asinh': np.arcsinh, 'acosh': np.arccosh, 'atanh': np.arctanh,
+                                                    'exp': np.exp, 'log': np.log, 'log10': np.log10,
+                                                    'log2': lambda x: np.log2(x) if x > 0 else np.nan,
+                                                    'sqrt': np.sqrt, 'abs': np.abs, 'pi': np.pi, 'e': np.e,
+                                                    'cot': lambda x: 1/np.tan(x) if np.tan(x) != 0 else np.nan,
+                                                    'sec': lambda x: 1/np.cos(x) if np.cos(x) != 0 else np.nan,
+                                                    'csc': lambda x: 1/np.sin(x) if np.sin(x) != 0 else np.nan,
+                                                    'coth': lambda x: 1/np.tanh(x) if np.tanh(x) != 0 else np.nan,
+                                                    'sech': lambda x: 1/np.cosh(x),
+                                                    'csch': lambda x: 1/np.sinh(x) if np.sinh(x) != 0 else np.nan,
+                                                    'acot': lambda x: np.rad2deg(np.arctan(1/x)) if x != 0 else (90 if x > 0 else -90),
+                                                    'asec': lambda x: np.rad2deg(np.arccos(1/x)) if abs(x) >= 1 else np.nan,
+                                                    'acsc': lambda x: np.rad2deg(np.arcsin(1/x)) if abs(x) >= 1 else np.nan,
+                                                    'acoth': lambda x: 0.5 * np.log((x+1)/(x-1)) if abs(x) > 1 else np.nan,
+                                                    'asech': lambda x: np.log((1+np.sqrt(1-x*x))/x) if 0 < x <= 1 else np.nan,
+                                                    'acsch': lambda x: np.log((1+np.sqrt(1+x*x))/x) if x != 0 else np.nan,
+                                                    'floor': np.floor, 'ceil': np.ceil, 'round': np.round,
+                                                    'cbrt': lambda x: np.cbrt(x),
+                                                    'gamma': lambda x: float(sp.gamma(float(x))) if x > 0 else np.nan,
+                                                    'factorial': lambda x: np.math.factorial(int(x)) if x >= 0 and float(x).is_integer() else np.nan,
+                                                    'min': np.minimum, 'max': np.maximum,
+                                                    'sign': np.sign}])
+                    numpy_funcs.append(func)
+                    print(f"Función creada exitosamente para ecuación en modo {self.angle_mode}")
+                except Exception as e:
+                    print(f"Advertencia: No se pudo crear función para {eq}: {e}")
+                    def error_func(*args):
+                        return float('nan')
+                    numpy_funcs.append(error_func)
             
             def equations_func(vars):
-                return [float(f(*vars)) for f in numpy_funcs]
+                results = []
+                for f in numpy_funcs:
+                    try:
+                        result = f(*vars)
+                        if hasattr(result, '__iter__'):
+                            results.append(float(result[0]) if len(result) > 0 else float(result))
+                        else:
+                            results.append(float(result))
+                    except Exception as e:
+                        print(f"Error evaluando función: {e}")
+                        results.append(float('nan'))
+                return results
             
             # Resultados de todos los métodos
             all_solutions = []
             methods_used = []
             
-            # ORDEN DE EJECUCIÓN POR CONSUMO COMPUTACIONAL (de menor a mayor):
+            # 1. Método más simple: Intento de solución simbólica
+            if self.angle_mode == "rad":  # Solo en modo RAD
+                symbolic_result = self.try_symbolic_solution()
+                if symbolic_result:
+                    all_solutions.extend(symbolic_result)
+                    methods_used.append("simbólica")
+                    if len(self.equations) == len(var_list):
+                        print("Solución simbólica encontrada")
+                        unique_solutions = self.filter_unique_solutions(all_solutions)
+                        return {
+                            "success": True, 
+                            "solutions": unique_solutions,
+                            "methods_used": list(set(methods_used)),
+                            "total_solutions": len(unique_solutions)
+                        }
             
-            # 1. Método más simple: Intento de solución simbólica (menos consumo)
-            symbolic_result = self.try_symbolic_solution()
-            if symbolic_result:
-                all_solutions.extend(symbolic_result)
-                methods_used.append("simbólica")
-                # Si encontramos solución simbólica, podemos retornar temprano
-                if len(self.equations) == len(var_list):  # Sistema determinado
-                    print("Solución simbólica encontrada, omitiendo métodos numéricos")
-                    unique_solutions = self.filter_unique_solutions(all_solutions)
-                    return {
-                        "success": True, 
-                        "solutions": unique_solutions,
-                        "methods_used": list(set(methods_used)),
-                        "total_solutions": len(unique_solutions)
-                    }
-            
-            # 2. Método rápido: fsolve con pocas iteraciones
+            # 2. Método rápido: fsolve
+            print("Probando método: fsolve")
             fsolve_result = self.try_fsolve(var_list, equations_func)
             if fsolve_result:
                 all_solutions.extend(fsolve_result)
                 methods_used.append("fsolve")
             
             # 3. Método intermedio: root con métodos simples
+            print("Probando método: root-simple")
             root_result = self.try_root_methods_simple(var_list, equations_func)
             if root_result:
                 all_solutions.extend(root_result)
                 methods_used.append("root-simple")
             
             # 4. Método más costoso: Newton personalizado
+            print("Probando método: newton")
             newton_result = self.try_newton_method(var_list, equations_func)
             if newton_result:
                 all_solutions.extend(newton_result)
                 methods_used.append("newton")
             
             # 5. Método costoso: least_squares
+            print("Probando método: mínimos cuadrados")
             least_sq_result = self.try_least_squares(var_list, equations_func)
             if least_sq_result:
                 all_solutions.extend(least_sq_result)
@@ -137,6 +346,7 @@ class AdvancedEquationSolver:
             
             # 6. Método más costoso: root con métodos complejos (solo si no se encontraron soluciones)
             if not all_solutions:
+                print("Probando método: root-complex")
                 root_complex_result = self.try_root_methods_complex(var_list, equations_func)
                 if root_complex_result:
                     all_solutions.extend(root_complex_result)
@@ -146,6 +356,7 @@ class AdvancedEquationSolver:
             unique_solutions = self.filter_unique_solutions(all_solutions)
             
             if unique_solutions:
+                print(f"Solución encontrada. Total de soluciones únicas: {len(unique_solutions)}")
                 return {
                     "success": True, 
                     "solutions": unique_solutions,
@@ -153,20 +364,24 @@ class AdvancedEquationSolver:
                     "total_solutions": len(unique_solutions)
                 }
             else:
+                print("No se encontraron soluciones con ningún método")
                 return {"error": "No se encontraron soluciones con ningún método"}
                     
         except Exception as e:
+            print(f"Error en solve_system: {str(e)}")
             return {"error": f"Error: {str(e)}"}
     
     def try_symbolic_solution(self):
         """Intenta solución simbólica (método más liviano)"""
         try:
             var_list = sorted(list(self.variables))
+            
             # Limitar el tiempo para sistemas grandes
             if len(var_list) > 5 or len(self.equations) > 5:
                 print("Sistema demasiado grande para solución simbólica rápida")
                 return None
                 
+            print("Intentando solución simbólica...")
             solutions = sp.solve(self.equations, var_list, dict=True, manual=True, simplify=False)
             
             if solutions:
@@ -191,6 +406,7 @@ class AdvancedEquationSolver:
                         "error": 0.0
                     })
                 
+                print("Solución simbólica encontrada")
                 return result
         except Exception as e:
             print(f"Solución simbólica falló: {e}")
@@ -199,8 +415,9 @@ class AdvancedEquationSolver:
     def try_fsolve(self, var_list, equations_func):
         """Intenta solución con fsolve (método rápido)"""
         solutions = []
-        # Usar menos guesses para este método rápido
         guesses = self.generate_initial_guesses(len(var_list), n_guesses=5)
+        
+        print(f"Generando {len(guesses)} guesses iniciales para fsolve")
         
         for guess in guesses:
             try:
@@ -208,22 +425,27 @@ class AdvancedEquationSolver:
                     return fsolve(equations_func, guess, full_output=True, maxfev=100)
                 
                 future = self.executor.submit(timeout_wrapper)
-                x_sol, info, ier, msg = future.result(timeout=self.timeout)
+                result = future.result(timeout=self.timeout)
                 
-                if ier == 1:
-                    residuals = equations_func(x_sol)
-                    error = np.linalg.norm(residuals)
-                    
-                    if error < 1e-6:
-                        sol_dict = {var: float(val) for var, val in zip(var_list, x_sol)}
-                        solutions.append({
-                            "solution": sol_dict,
-                            "method": "fsolve",
-                            "error": error
-                        })
+                if len(result) == 4:
+                    x_sol, info, ier, msg = result
+                    if ier == 1:
+                        residuals = equations_func(x_sol)
+                        error = np.linalg.norm(residuals)
+                        
+                        if error < 1e-6:
+                            sol_dict = {var: float(val) for var, val in zip(var_list, x_sol)}
+                            solutions.append({
+                                "solution": sol_dict,
+                                "method": "fsolve",
+                                "error": error
+                            })
+                            print(f"fsolve encontró solución con error: {error}")
             except TimeoutError:
+                print(f"fsolve timeout para guess: {guess}")
                 continue
             except Exception as e:
+                print(f"fsolve error para guess {guess}: {e}")
                 continue
         
         return solutions
@@ -233,7 +455,6 @@ class AdvancedEquationSolver:
         solutions = []
         guesses = self.generate_initial_guesses(len(var_list), n_guesses=3)
         
-        # Solo métodos simples y rápidos
         methods = ['hybr', 'lm']
         
         for method in methods:
@@ -251,7 +472,9 @@ class AdvancedEquationSolver:
                                 "method": f"root-{method}",
                                 "error": error
                             })
-                except:
+                            print(f"root-{method} encontró solución con error: {error}")
+                except Exception as e:
+                    print(f"root-{method} error: {e}")
                     continue
         
         return solutions
@@ -261,7 +484,6 @@ class AdvancedEquationSolver:
         solutions = []
         guesses = self.generate_initial_guesses(len(var_list), n_guesses=2)
         
-        # Métodos más costosos
         methods = ['broyden1', 'broyden2', 'anderson']
         
         for method in methods:
@@ -279,7 +501,9 @@ class AdvancedEquationSolver:
                                 "method": f"root-{method}",
                                 "error": error
                             })
-                except:
+                            print(f"root-{method} encontró solución con error: {error}")
+                except Exception as e:
+                    print(f"root-{method} error: {e}")
                     continue
         
         return solutions
@@ -293,13 +517,14 @@ class AdvancedEquationSolver:
             try:
                 x = np.array(guess, dtype=float)
                 n = len(x)
-                max_iter = 50  # Reducir iteraciones
+                max_iter = 50
                 tol = 1e-10
                 
-                for _ in range(max_iter):
+                for iter_count in range(max_iter):
                     f_val = np.array(equations_func(x))
                     
                     if np.linalg.norm(f_val) < tol:
+                        print(f"Newton convergió en {iter_count} iteraciones")
                         break
                     
                     J = np.zeros((len(self.equations), n))
@@ -317,7 +542,7 @@ class AdvancedEquationSolver:
                         dx = -np.linalg.pinv(J) @ f_val
                     
                     alpha = 1.0
-                    for _ in range(5):  # Reducir búsqueda de línea
+                    for _ in range(5):
                         x_new = x + alpha * dx
                         f_new = np.array(equations_func(x_new))
                         
@@ -336,7 +561,9 @@ class AdvancedEquationSolver:
                         "method": "newton",
                         "error": error
                     })
-            except:
+                    print(f"Newton encontró solución con error: {error}")
+            except Exception as e:
+                print(f"Newton error: {e}")
                 continue
         
         return solutions
@@ -351,10 +578,15 @@ class AdvancedEquationSolver:
                 def residuals_func(vars):
                     return np.array(equations_func(vars))
                 
+                if self.angle_mode == "rad":
+                    bounds = (-10, 10)
+                else:
+                    bounds = (-360, 360)
+                
                 result = least_squares(residuals_func, guess, 
-                                      bounds=(-10, 10), 
+                                      bounds=bounds, 
                                       method='trf',
-                                      max_nfev=200)  # Reducir evaluaciones
+                                      max_nfev=200)
                 
                 if result.success:
                     error = np.linalg.norm(result.fun)
@@ -365,7 +597,9 @@ class AdvancedEquationSolver:
                             "method": "mínimos cuadrados",
                             "error": error
                         })
-            except:
+                        print(f"Mínimos cuadrados encontró solución con error: {error}")
+            except Exception as e:
+                print(f"Mínimos cuadrados error: {e}")
                 continue
         
         return solutions
@@ -393,14 +627,13 @@ class AdvancedEquationSolver:
 
 # Variables globales para comunicación entre hilos
 result_queue = queue.Queue()
-status_queue = queue.Queue()  # Nueva cola para estado del método actual
+status_queue = queue.Queue()
 is_solving = False
 current_method = ""
-# Usamos un lock para proteger el acceso a is_solving
+angle_mode = "rad"
+angle_mode_btn = None
 solving_lock = threading.Lock()
-# Timer para verificar resultados
 check_timer = None
-# Timer para verificar estado
 status_timer = None
 
 solver = AdvancedEquationSolver()
@@ -537,7 +770,6 @@ ui.add_head_html('''
         background: #fdfdfd;
     }
     
-    /* Área de ecuaciones */
     .equation-box {
         width: 100%;
         height: 100%;
@@ -577,7 +809,6 @@ ui.add_head_html('''
         border-radius: 3px;
     }
     
-    /* Área de resultados */
     .results-box {
         width: 100%;
         height: 100%;
@@ -602,7 +833,6 @@ ui.add_head_html('''
         background: #d0d0d0;
     }
     
-    /* Solución */
     .solution-card {
         background: white;
         border-radius: 12px;
@@ -637,7 +867,6 @@ ui.add_head_html('''
         letter-spacing: 0.5px;
     }
     
-    /* Variables apiladas */
     .variables-stacked {
         display: flex;
         flex-direction: column;
@@ -682,7 +911,6 @@ ui.add_head_html('''
         color: #888;
     }
     
-    /* Estado de error */
     .error-state {
         height: 100%;
         display: flex;
@@ -714,7 +942,6 @@ ui.add_head_html('''
         line-height: 1.5;
     }
     
-    /* Loading state mejorado */
     .loading-state {
         height: 100%;
         display: flex;
@@ -826,7 +1053,6 @@ ui.add_head_html('''
         text-align: center;
     }
     
-    /* Resultados estadísticos */
     .stats-box {
         background: #f8f9fa;
         border-radius: 8px;
@@ -901,6 +1127,43 @@ ui.add_head_html('''
         border-radius: 2px;
         transition: width 0.5s ease;
     }
+    
+    .angle-mode-btn {
+        width: 60px;
+        height: 32px;
+        border-radius: 16px;
+        background: #f8f9fa;
+        color: #666;
+        border: 1px solid #e0e0e0;
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        margin-right: 8px;
+    }
+    
+    .angle-mode-btn:hover {
+        background: #f0f0f0;
+        border-color: #d0d0d0;
+    }
+    
+    .angle-mode-btn.active {
+        background: #000;
+        color: white;
+        border-color: #000;
+    }
+    
+    .mode-indicator {
+        font-size: 11px;
+        color: #666;
+        background: #f0f0f0;
+        padding: 4px 8px;
+        border-radius: 4px;
+        margin-right: 8px;
+        font-weight: 500;
+    }
 </style>
 ''')
 
@@ -909,9 +1172,19 @@ with ui.element('div').classes('app-container'):
     # Barra superior
     with ui.element('div').classes('top-bar'):
         ui.label('Advanced Equation Solver').classes('app-title')
-        with ui.button('', on_click=lambda: solve_equations()).classes('solve-btn') as play_btn:
-            ui.element('div').classes('btn-spinner')
-            ui.label('▶').classes('play-icon')
+        
+        with ui.row().classes('items-center gap-2'):
+            # Indicador de modo actual
+            mode_indicator = ui.label('MODO: RAD').classes('mode-indicator')
+            
+            # Botón de modo ángulo
+            angle_mode_btn = ui.button('RAD', on_click=lambda: toggle_angle_mode()).classes('angle-mode-btn')
+            angle_mode_btn.props('title=Clic para cambiar entre radianes y grados')
+            
+            # Botón de resolver
+            with ui.button('', on_click=lambda: solve_equations()).classes('solve-btn') as play_btn:
+                ui.element('div').classes('btn-spinner')
+                ui.label('▶').classes('play-icon')
     
     # Grid de dos columnas
     with ui.element('div').classes('main-grid'):
@@ -923,8 +1196,41 @@ with ui.element('div').classes('app-container'):
             with ui.element('div').classes('panel-body'):
                 with ui.element('div').classes('equation-box'):
                     equation_area = ui.textarea(
-                        value='x + y = 5\nx - y = 1',
-                        placeholder='Una ecuación por línea\n\nEjemplos avanzados:\nx + y + z = 10\nx^2 + y^2 = 25\nsin(x) + cos(y) = 1\nexp(x) - y = 0\nx*y*z = 1',
+                        value='sin(30) = 0.5\ncos(x) = 0.5',
+                        placeholder='''UNA ECUACIÓN POR LÍNEA
+
+IMPORTANTE: En modo DEG (grados), las constantes en funciones trigonométricas se interpretan como grados.
+Ejemplo: sin(30) se interpreta como 30 grados en modo DEG.
+
+SINTAXIS FUNCIONAL:
+-------------------
+Operadores: + - * / ^ **
+Potencias: x^2, x**2
+Trigonométricas: sin(x), cos(x), tan(x), cot(x), sec(x), csc(x)
+Inversas: asin(x), acos(x), atan(x), acot(x), asec(x), acsc(x)
+Hiperbólicas: sinh(x), cosh(x), tanh(x), coth(x), sech(x), csch(x)
+Inversas hiperbólicas: asinh(x), acosh(x), atanh(x), acoth(x), asech(x), acsch(x)
+Exponenciales: exp(x), log(x), ln(x), log10(x), log2(x)
+Raíces: sqrt(x), cbrt(x)
+Valor absoluto: abs(x)
+Redondeo: floor(x), ceil(x), round(x)
+Constantes: pi, e, inf
+Funciones especiales: gamma(x), factorial(x), erf(x), erfc(x)
+Mín/Max: min(x,y), max(x,y)
+
+CÁLCULO:
+Integrales: integral(x^2, x)
+Integral definida: integral(x^2, (x, 0, 1))
+Sumatorias: sum(i^2, (i, 1, n))
+Productorias: product(i, (i, 1, n))
+
+EJEMPLOS:
+x^2 + y^2 = 25
+sin(x) + cos(y) = 1
+exp(x) - log(y) = 2
+diff(sin(x), x) = cos(x)
+min(x, y) = 5
+max(x, y, z) = 10''',
                         on_change=lambda e: update_equation_info()
                     ).classes('equation-textarea').props('borderless')
                     
@@ -944,15 +1250,53 @@ def update_equation_info():
     var_set = set()
     
     for eq in eq_texts:
-        matches = re.findall(r'\b[a-zA-Z][a-zA-Z0-9]*\b', eq)
+        eq_clean = eq.lower()
+        funcs = ['sin', 'cos', 'tan', 'cot', 'sec', 'csc',
+                'asin', 'acos', 'atan', 'acot', 'asec', 'acsc',
+                'sinh', 'cosh', 'tanh', 'coth', 'sech', 'csch',
+                'asinh', 'acosh', 'atanh', 'acoth', 'asech', 'acsch',
+                'exp', 'log', 'ln', 'log10', 'log2',
+                'sqrt', 'cbrt', 'abs', 'floor', 'ceil', 'round',
+                'gamma', 'factorial', 'erf', 'erfc',
+                'min', 'max', 'diff', 'integral', 'sum', 'product',
+                'pi', 'e', 'inf']
+        
+        for func in funcs:
+            eq_clean = eq_clean.replace(func, '')
+        
+        matches = re.findall(r'[a-zA-Z]', eq_clean)
         var_set.update(matches)
     
-    math_keywords = {'sin', 'cos', 'tan', 'exp', 'log', 'ln', 'sqrt', 'pi', 'e', 'abs'}
-    variables = [v for v in var_set if v.lower() not in math_keywords and not v.isdigit()]
+    variables = [v for v in var_set if len(v) == 1]
     
     equation_info.text = f'{len(eq_texts)} ecuaciones, {len(variables)} variables'
 
-# Variables para controlar el estado de resolución
+def toggle_angle_mode():
+    """Alterna entre modo grados y radianes"""
+    global angle_mode
+    
+    if angle_mode == "rad":
+        angle_mode = "deg"
+        solver.set_angle_mode("deg")
+        if angle_mode_btn:
+            angle_mode_btn.text = "DEG"
+            angle_mode_btn.classes('active')
+        if mode_indicator:
+            mode_indicator.text = "MODO: DEG"
+        ui.notify('Modo cambiado a GRADOS (DEG)', type='info', position='top-right', timeout=2000)
+    else:
+        angle_mode = "rad"
+        solver.set_angle_mode("rad")
+        if angle_mode_btn:
+            angle_mode_btn.text = "RAD"
+            angle_mode_btn.classes(remove='active')
+        if mode_indicator:
+            mode_indicator.text = "MODO: RAD"
+        ui.notify('Modo cambiado a RADIANES (RAD)', type='info', position='top-right', timeout=2000)
+    
+    print(f"Modo cambiado a: {angle_mode}")
+    print(f"Solver en modo: {solver.angle_mode}")
+
 current_method_index = 0
 method_tags = []
 
@@ -969,16 +1313,13 @@ def show_solving_state():
                 ui.element('div').classes('ring ring-3')
             
             ui.label('Buscando soluciones...').classes('solving-text')
-            ui.label('Probando múltiples métodos en orden de eficiencia').classes('solving-subtext')
+            ui.label(f'Probando métodos en modo {angle_mode.upper()}').classes('solving-subtext')
             
-            # Contador de métodos
             method_counter = ui.label('Método 1 de 6').classes('method-counter')
             
-            # Barra de progreso
             with ui.element('div').classes('method-progress'):
                 progress_bar = ui.element('div').classes('method-progress-bar').style('width: 16.66%')
             
-            # Mostrar métodos en el orden en que se ejecutan
             methods = [
                 "1. Solución simbólica",
                 "2. Método fsolve", 
@@ -1001,25 +1342,20 @@ def update_solving_state(method_index):
     global current_method_index, method_tags
     
     if method_index < len(method_tags):
-        # Quitar clase 'active' de todos los métodos
         for tag in method_tags:
             tag.classes(remove='active')
             tag.classes(remove='completed')
         
-        # Marcar métodos anteriores como completados
         for i in range(method_index):
             if i < len(method_tags):
                 method_tags[i].classes('completed')
         
-        # Marcar método actual como activo
         method_tags[method_index].classes('active')
         
-        # Actualizar contador
         counter_text = f'Método {method_index + 1} de {len(method_tags)}'
         if hasattr(update_solving_state, 'counter_label'):
             update_solving_state.counter_label.text = counter_text
         
-        # Actualizar barra de progreso
         progress = ((method_index + 1) / len(method_tags)) * 100
         if hasattr(update_solving_state, 'progress_bar'):
             update_solving_state.progress_bar.style(f'width: {progress}%')
@@ -1036,7 +1372,6 @@ def update_results(result):
                 ui.label(result["error"]).classes('error-message')
     else:
         with results_container:
-            # Mostrar estadísticas
             with ui.element('div').classes('stats-box'):
                 ui.label('ESTADÍSTICAS').classes('stats-title')
                 with ui.element('div').classes('stats-grid'):
@@ -1056,8 +1391,11 @@ def update_results(result):
                         else:
                             vars_count = 0
                         ui.label(str(vars_count)).classes('stat-value')
+                    
+                    with ui.element('div').classes('stat-item'):
+                        ui.label('Modo').classes('stat-label')
+                        ui.label(angle_mode.upper()).classes('stat-value')
             
-            # Mostrar soluciones
             for i, solution_data in enumerate(result["solutions"]):
                 solution = solution_data.get("solution", {})
                 method = solution_data.get("method", "desconocido")
@@ -1071,7 +1409,6 @@ def update_results(result):
                             ui.label('Solución').classes('solution-title')
                         ui.label(method).classes('method-badge')
                     
-                    # Variables apiladas verticalmente
                     with ui.element('div').classes('variables-stacked'):
                         for var, value in sorted(solution.items()):
                             with ui.element('div').classes('variable-line'):
@@ -1079,9 +1416,7 @@ def update_results(result):
                                 ui.label('=').classes('var-equals')
                                 
                                 if isinstance(value, (int, float)):
-                                    # Siempre mostrar con 5 decimales
                                     formatted = f"{value:.5f}"
-                                    # Corregir -0.00000 a 0.00000
                                     if formatted == "-0.00000":
                                         formatted = "0.00000"
                                 else:
@@ -1089,16 +1424,15 @@ def update_results(result):
                                 
                                 ui.label(formatted).classes('var-value')
                     
-                    # Información adicional
                     with ui.element('div').classes('solution-info'):
-                        ui.label(f'Método: {method} | Error: {error:.2e}')
+                        ui.label(f'Método: {method} | Error: {error:.2e} | Modo: {angle_mode.upper()}')
 
 def solve_in_background(eq_texts):
     """Función que se ejecuta en el hilo de fondo"""
     try:
         print(f"Iniciando resolución de {len(eq_texts)} ecuaciones...")
+        print(f"Modo ángulo actual del solver: {solver.angle_mode}")
         
-        # Simular progreso de métodos (en una implementación real, esto vendría del solver)
         methods_order = [
             "simbólica",
             "fsolve", 
@@ -1108,15 +1442,13 @@ def solve_in_background(eq_texts):
             "root-complex"
         ]
         
-        # Enviar actualizaciones de progreso
         for i, method in enumerate(methods_order):
-            time.sleep(0.5)  # Simular tiempo entre métodos
+            time.sleep(0.5)
             if status_queue:
-                status_queue.put(i)  # Enviar índice del método actual
+                status_queue.put(i)
         
-        # Resolver realmente
         result = solver.solve_system(eq_texts)
-        print(f"Resultado obtenido: {result}")
+        print(f"Resultado obtenido en modo {solver.angle_mode}: {result}")
         result_queue.put(result)
         
     except Exception as e:
@@ -1130,15 +1462,12 @@ def check_result():
     if not result_queue.empty():
         result = result_queue.get()
         
-        # Actualizar el estado de resolución
         with solving_lock:
             is_solving = False
         
-        # Actualizar la UI
         play_btn.classes(remove='loading')
         update_results(result)
         
-        # Detener los timers
         if check_timer:
             check_timer.deactivate()
             check_timer = None
@@ -1147,9 +1476,9 @@ def check_result():
             status_timer.deactivate()
             status_timer = None
         
-        return False  # Detener el timer
+        return False
     
-    return True  # Continuar verificando
+    return True
 
 def check_status():
     """Función que verifica si hay actualizaciones de estado"""
@@ -1163,7 +1492,6 @@ def solve_equations():
     """Función principal para resolver ecuaciones"""
     global is_solving, check_timer, status_timer, current_method_index
     
-    # Verificar si ya se está resolviendo
     with solving_lock:
         if is_solving:
             print("Ya se está resolviendo, espera...")
@@ -1178,26 +1506,21 @@ def solve_equations():
             is_solving = False
         return
     
-    print(f"Iniciando resolución de {len(eq_texts)} ecuaciones...")
+    print(f"Iniciando resolución de {len(eq_texts)} ecuaciones en modo {angle_mode}...")
     play_btn.classes('loading')
     
-    # Reiniciar índice del método
     current_method_index = 0
     
-    # Mostrar estado de resolución
     show_solving_state()
     
-    # Guardar referencias a los elementos de la UI para actualizarlos
     if results_container:
         with results_container:
-            # Buscar y guardar referencias a los elementos de progreso
             for element in results_container.default_slot.children:
                 if hasattr(element, 'text') and 'Método 1 de 6' in element.text:
                     update_solving_state.counter_label = element
                 elif hasattr(element, 'style') and 'method-progress-bar' in element.classes:
                     update_solving_state.progress_bar = element
     
-    # Detener timers anteriores si existen
     if check_timer:
         check_timer.deactivate()
         check_timer = None
@@ -1206,27 +1529,20 @@ def solve_equations():
         status_timer.deactivate()
         status_timer = None
     
-    # Iniciar hilo de fondo para resolver
     thread = threading.Thread(target=solve_in_background, args=(eq_texts,), daemon=True)
     thread.start()
     
-    # Iniciar timer para verificar resultados
     check_timer = ui.timer(0.5, check_result)
-    
-    # Iniciar timer para verificar estado (más rápido para animación suave)
     status_timer = ui.timer(0.1, check_status)
     
-    # También iniciar una simulación de progreso visual
     def simulate_progress():
         global current_method_index
         if current_method_index < 6:
             update_solving_state(current_method_index)
             current_method_index += 1
     
-    # Iniciar simulación de progreso (cada 1 segundo cambia de método)
     ui.timer(1.0, lambda: simulate_progress() if is_solving else False)
 
-# Inicializar información de ecuaciones
 update_equation_info()
 
 if __name__ in {"__main__", "__mp_main__"}:
