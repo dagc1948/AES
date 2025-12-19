@@ -1,12 +1,15 @@
-# 🧮 Advanced Equation Solver
+<img width="360" height="360" alt="Gemini_Generated_Image_rzw4p2rzw4p2rzw4" src="https://github.com/user-attachments/assets/d6959838-de02-4675-883e-0c9793257274" />
+
+
+#  Advanced Equation Solver
 
 Una aplicación web avanzada para resolver sistemas de ecuaciones algebraicas, trigonométricas y trascendentes con soporte completo para modos grados/radianes.
 
 ---
 
-## 🌟 Características Principales
+##  Características Principales
 
-### 🔄 Modos de Ángulo Inteligentes
+###  Modos de Ángulo Inteligentes
 * **RAD (Radianes):** Modo por defecto para cálculos matemáticos.
 * **DEG (Grados):** Conversión automática de constantes trigonométricas (ej: `sin(30)` = 0.5).
 * **Cambio dinámico:** Alterna entre modos con un solo clic sin perder datos.
@@ -17,7 +20,7 @@ Una aplicación web avanzada para resolver sistemas de ecuaciones algebraicas, t
 * **Cálculo:** Derivadas, integrales, sumatorias y productorias.
 * **Funciones Especiales:** Gamma, factorial, error y Bessel.
 
-### 🎯 Métodos de Resolución
+###  Métodos de Resolución
 1. **Simbólico (SymPy):** Para obtener soluciones exactas y analíticas.
 2. **Numérico (SciPy):** Implementación de `fsolve`, `root`, `Newton` y mínimos cuadrados.
 3. **Estrategia en Cascada:** Ejecuta métodos rápidos primero y complejos después.
@@ -25,14 +28,14 @@ Una aplicación web avanzada para resolver sistemas de ecuaciones algebraicas, t
 
 ---
 
-## 🖥️ Interfaz de Usuario
+##  Interfaz de Usuario
 * **Diseño Moderno:** UI reactiva con CSS personalizado y animaciones suaves.
 * **Feedback en Tiempo Real:** Visualización del progreso del solver.
 * **Panel de Estadísticas:** Muestra el número de soluciones, métodos usados y error de aproximación.
 
 ---
 
-## 🚀 Instalación y Inicio Rápido
+##  Instalación y Inicio Rápido
 
 ```bash
 # 1. Clonar el repositorio
@@ -50,7 +53,7 @@ La aplicación estará disponible en: http://localhost:8080
 
 ---
 
-## 📖 Ejemplos de Uso
+##  Ejemplos de Uso
 
 Escribe tus ecuaciones (una por línea), el sistema detectará las variables automáticamente:
 
@@ -68,7 +71,7 @@ x^2 + y^2 = 25
 
 ---
 
-## 🔧 Detalles Técnicos
+##  Detalles Técnicos
 
 ### Manejo de Casos Especiales
 * **Conversión DEG:** `sin(30)` se procesa internamente como `sin(30 * pi/180)`.
