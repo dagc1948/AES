@@ -15,5 +15,5 @@ Interfaz Reactiva: Visualización de progreso, estadísticas de error y scroll i
 
 
 
-x^2 + y^2 = 25       # Círculo
-sin(x) + cos(y) = 1  # Trigonométrica
+-> x^2 + y^2 = 25      
+-> sin(x) + cos(y) = 1 
