@@ -23,9 +23,26 @@ class AdvancedEquationSolver:
         self.angle_mode = mode
         print(f"Modo de ángulo cambiado a: {self.angle_mode}")
         
+    def contains_symbolic_operations(self, expr):
+        """Detecta si la expresión contiene operaciones simbólicas como integrales, derivadas, etc."""
+        # Buscar nodos de integral, derivada, suma, producto
+        if expr.has(sp.Integral) or expr.has(sp.Derivative) or expr.has(sp.Sum) or expr.has(sp.Product):
+            return True
+        
+        # Recorrer el árbol de la expresión
+        for sub_expr in sp.preorder_traversal(expr):
+            if isinstance(sub_expr, sp.Integral) or isinstance(sub_expr, sp.Derivative) or \
+               isinstance(sub_expr, sp.Sum) or isinstance(sub_expr, sp.Product):
+                return True
+        return False
+    
     def parse_equation(self, eq_text: str):
         """Convierte una ecuación en formato string a expresión sympy"""
         eq_text = eq_text.strip()
+        
+        # Si la ecuación comienza con #, es un comentario - no procesar
+        if eq_text.startswith('#'):
+            raise ValueError("Línea de comentario, no es una ecuación")
         
         # Reemplazar símbolos especiales
         eq_text = eq_text.replace('^', '**')
@@ -77,20 +94,22 @@ class AdvancedEquationSolver:
         for marker, func in temp_markers.items():
             eq_text = eq_text.replace(marker, func)
         
-        # **CORRECCIÓN CRÍTICA: Transformar números en funciones trigonométricas en modo DEG**
+        # **CORRECCIÓN CRÍTICA: En modo DEG, transformar sin(x) en sin(x*pi/180)**
         if self.angle_mode == "deg":
             # Identificar funciones trigonométricas directas
             trig_direct = ['sin', 'cos', 'tan', 'cot', 'sec', 'csc']
             
             for func in trig_direct:
-                # Patrón para encontrar funciones trigonométricas con números
-                pattern = r'\b(' + func + r')\s*\(\s*([+-]?\d+(?:\.\d*)?|\.\d+)\s*\)'
+                # Patrón para encontrar funciones trigonométricas con argumentos que son variables
+                # Ejemplo: sin(x), cos(y+1), etc.
+                pattern = r'\b(' + func + r')\s*\(\s*([^()]+?(?:\([^()]*\)[^()]*?)*)\s*\)'
                 
                 def replace_with_degrees(match):
-                    """Reemplaza sin(30) por sin(30*pi/180) en modo grados"""
+                    """Reemplaza sin(expr) por sin(expr*pi/180) en modo grados"""
                     func_name = match.group(1)
-                    number = match.group(2)
-                    return f'{func_name}({number}*pi/180)'
+                    argument = match.group(2)
+                    # Añadir conversión a radianes
+                    return f'{func_name}(({argument})*pi/180)'
                 
                 eq_text = re.sub(pattern, replace_with_degrees, eq_text, flags=re.IGNORECASE)
         
@@ -103,7 +122,7 @@ class AdvancedEquationSolver:
         
         try:
             # Parsear la expresión con sympy
-            return sp.sympify(expr, locals={
+            sympy_expr = sp.sympify(expr, locals={
                 'sin': sp.sin, 'cos': sp.cos, 'tan': sp.tan,
                 'asin': sp.asin, 'acos': sp.acos, 'atan': sp.atan,
                 'sinh': sp.sinh, 'cosh': sp.cosh, 'tanh': sp.tanh,
@@ -122,13 +141,16 @@ class AdvancedEquationSolver:
                 'log2': lambda x: sp.log(x, 2),
                 'cbrt': lambda x: x**sp.Rational(1, 3),
                 'pow': sp.Pow,
-                'diff': lambda f, x, n=1: sp.diff(f, x, n) if n > 0 else f,
-                'integral': lambda f, x: sp.integrate(f, x),
-                'sum': lambda f, var, a, b: sp.summation(f, (var, a, b)),
-                'product': lambda f, var, a, b: sp.product(f, (var, a, b)),
+                'diff': lambda f, *args: sp.diff(f, *args),
+                'integral': lambda f, *args: sp.integrate(f, *args),
+                'sum': lambda f, *args: sp.summation(f, *args),
+                'product': lambda f, *args: sp.product(f, *args),
                 'min': sp.Min, 'max': sp.Max,
                 'sign': sp.sign
             })
+            
+            return sympy_expr
+            
         except Exception as e:
             raise ValueError(f"No se pudo parsear la ecuación: {expr}\nError: {e}")
     
@@ -184,16 +206,29 @@ class AdvancedEquationSolver:
             self.equations = []
             self.variables = set()
             
-            # Parsear ecuaciones
+            # Filtrar comentarios y líneas vacías
+            filtered_equations = []
             for eq_text in equations_text:
-                if eq_text.strip():
-                    print(f"Parseando ecuación en modo {self.angle_mode}: {eq_text}")
-                    expr = self.parse_equation(eq_text)
-                    self.equations.append(expr)
-                    self.variables.update({str(s) for s in expr.free_symbols})
+                eq_text = eq_text.strip()
+                # Ignorar líneas vacías y comentarios
+                if eq_text and not eq_text.startswith('#'):
+                    filtered_equations.append(eq_text)
+            
+            # Parsear ecuaciones
+            has_symbolic_ops = False
+            for eq_text in filtered_equations:
+                print(f"Parseando ecuación en modo {self.angle_mode}: {eq_text}")
+                expr = self.parse_equation(eq_text)
+                self.equations.append(expr)
+                self.variables.update({str(s) for s in expr.free_symbols})
+                
+                # Verificar si tiene operaciones simbólicas
+                if self.contains_symbolic_operations(expr):
+                    has_symbolic_ops = True
+                    print(f"Ecuación contiene operaciones simbólicas: {eq_text}")
             
             if not self.equations:
-                return {"error": "No hay ecuaciones"}
+                return {"error": "No hay ecuaciones válidas (solo comentarios o líneas vacías)"}
             
             if not self.variables:
                 return {"error": "No hay variables para resolver"}
@@ -201,6 +236,43 @@ class AdvancedEquationSolver:
             var_list = sorted(list(self.variables))
             print(f"Variables detectadas: {var_list}")
             print(f"Número de ecuaciones: {len(self.equations)}")
+            print(f"¿Contiene operaciones simbólicas?: {has_symbolic_ops}")
+            
+            # Si hay operaciones simbólicas, usar solo método simbólico
+            if has_symbolic_ops:
+                print("Usando solo método simbólico por presencia de integrales/derivadas")
+                symbolic_result = self.try_symbolic_solution(force_symbolic=True)
+                if symbolic_result:
+                    unique_solutions = self.filter_unique_solutions(symbolic_result)
+                    return {
+                        "success": True, 
+                        "solutions": unique_solutions,
+                        "methods_used": ["simbólica"],
+                        "total_solutions": len(unique_solutions),
+                        "symbolic_mode": True
+                    }
+                else:
+                    return {"error": "No se pudo encontrar una solución simbólica para las operaciones simbólicas"}
+            
+            # Si hay más variables que ecuaciones, el sistema es indeterminado
+            if len(var_list) > len(self.equations):
+                print(f"Sistema indeterminado: {len(var_list)} variables, {len(self.equations)} ecuaciones")
+                symbolic_result = self.try_symbolic_solution(force_symbolic=True)
+                if symbolic_result:
+                    unique_solutions = self.filter_unique_solutions(symbolic_result)
+                    return {
+                        "success": True, 
+                        "solutions": unique_solutions,
+                        "methods_used": ["simbólica"],
+                        "total_solutions": len(unique_solutions),
+                        "indeterminate": True
+                    }
+                else:
+                    return {"error": f"Sistema indeterminado: {len(var_list)} variables, {len(self.equations)} ecuaciones. Se necesitan más ecuaciones."}
+            
+            # Verificar si el sistema es determinado
+            if len(self.equations) != len(var_list):
+                return {"error": f"Sistema mal definido: {len(self.equations)} ecuaciones, {len(var_list)} variables. Se necesitan igual número de ecuaciones y variables para solución numérica."}
             
             # Preparar funciones para métodos numéricos
             var_symbols = [sp.Symbol(v) for v in var_list]
@@ -240,17 +312,16 @@ class AdvancedEquationSolver:
                                                     'min': np.minimum, 'max': np.maximum,
                                                     'sign': np.sign}])
                     else:
-                        # **CORRECCIÓN: En modo grados, usar funciones que conviertan entrada de grados a radianes**
-                        # Pero las constantes ya fueron convertidas en parse_equation, así que usamos funciones normales
+                        # **CORRECCIÓN: En modo grados, las funciones trigonométricas ya tienen conversión a radianes**
+                        # Las funciones inversas deben devolver grados
                         func = sp.lambdify(var_symbols, eq, 
                                           modules=['numpy', 'math', 
-                                                   {'sin': np.sin,  # Ya viene convertido a radianes
+                                                   {'sin': np.sin,  # Ya viene convertido a radianes en el parseo
                                                     'cos': np.cos,
                                                     'tan': np.tan,
                                                     'asin': lambda x: np.rad2deg(np.arcsin(x)) if -1 <= x <= 1 else np.nan,
                                                     'acos': lambda x: np.rad2deg(np.arccos(x)) if -1 <= x <= 1 else np.nan,
                                                     'atan': lambda x: np.rad2deg(np.arctan(x)),
-                                                    'atan2': lambda y, x: np.rad2deg(np.arctan2(y, x)),
                                                     'sinh': np.sinh, 'cosh': np.cosh, 'tanh': np.tanh,
                                                     'asinh': np.arcsinh, 'acosh': np.arccosh, 'atanh': np.arctanh,
                                                     'exp': np.exp, 'log': np.log, 'log10': np.log10,
@@ -301,20 +372,19 @@ class AdvancedEquationSolver:
             methods_used = []
             
             # 1. Método más simple: Intento de solución simbólica
-            if self.angle_mode == "rad":  # Solo en modo RAD
-                symbolic_result = self.try_symbolic_solution()
-                if symbolic_result:
-                    all_solutions.extend(symbolic_result)
-                    methods_used.append("simbólica")
-                    if len(self.equations) == len(var_list):
-                        print("Solución simbólica encontrada")
-                        unique_solutions = self.filter_unique_solutions(all_solutions)
-                        return {
-                            "success": True, 
-                            "solutions": unique_solutions,
-                            "methods_used": list(set(methods_used)),
-                            "total_solutions": len(unique_solutions)
-                        }
+            symbolic_result = self.try_symbolic_solution(force_symbolic=False)
+            if symbolic_result:
+                all_solutions.extend(symbolic_result)
+                methods_used.append("simbólica")
+                if len(symbolic_result) > 0:
+                    print("Solución simbólica encontrada")
+                    unique_solutions = self.filter_unique_solutions(all_solutions)
+                    return {
+                        "success": True, 
+                        "solutions": unique_solutions,
+                        "methods_used": list(set(methods_used)),
+                        "total_solutions": len(unique_solutions)
+                    }
             
             # 2. Método rápido: fsolve
             print("Probando método: fsolve")
@@ -371,8 +441,8 @@ class AdvancedEquationSolver:
             print(f"Error en solve_system: {str(e)}")
             return {"error": f"Error: {str(e)}"}
     
-    def try_symbolic_solution(self):
-        """Intenta solución simbólica (método más liviano)"""
+    def try_symbolic_solution(self, force_symbolic=False):
+        """Intenta solución simbólica"""
         try:
             var_list = sorted(list(self.variables))
             
@@ -382,34 +452,89 @@ class AdvancedEquationSolver:
                 return None
                 
             print("Intentando solución simbólica...")
-            solutions = sp.solve(self.equations, var_list, dict=True, manual=True, simplify=False)
+            
+            # Si hay más variables que ecuaciones, obtener solución paramétrica
+            if len(var_list) > len(self.equations):
+                print("Sistema indeterminado - buscando solución paramétrica")
+                
+                # Intentar resolver para tantas variables como ecuaciones haya
+                try:
+                    # Tomar las primeras n variables donde n = número de ecuaciones
+                    vars_to_solve = var_list[:len(self.equations)]
+                    
+                    solutions = sp.solve(self.equations, vars_to_solve, dict=True, 
+                                        manual=True, simplify=False)
+                    
+                    if solutions:
+                        result = []
+                        for sol in solutions:
+                            symbolic_sol = {}
+                            # Añadir todas las variables
+                            for var in var_list:
+                                if var in sol:
+                                    value = sol[var]
+                                    # Simplificar la expresión
+                                    value = sp.simplify(value)
+                                    # Si es numérico, convertir a float con 5 decimales
+                                    if value.is_number:
+                                        num_val = float(sp.N(value))
+                                        # **CORRECCIÓN: En modo DEG, las soluciones ya están en grados**
+                                        # No multiplicar por 180/pi
+                                        symbolic_sol[var] = round(num_val, 5)
+                                    else:
+                                        symbolic_sol[var] = str(value)
+                                else:
+                                    # Variables libres (parámetros)
+                                    symbolic_sol[var] = f"({var} libre)"
+                            
+                            result.append({
+                                "solution": symbolic_sol,
+                                "method": "simbólica (paramétrica)",
+                                "error": 0.0,
+                                "parametric": True
+                            })
+                        
+                        print("Solución paramétrica encontrada")
+                        return result
+                except Exception as e:
+                    print(f"No se pudo encontrar solución paramétrica: {e}")
+            
+            # Intentar solución regular
+            solutions = sp.solve(self.equations, var_list, dict=True, 
+                                manual=True, simplify=False)
             
             if solutions:
                 result = []
                 for sol in solutions:
-                    float_sol = {}
+                    symbolic_sol = {}
                     for var, value in sol.items():
                         try:
+                            # Simplificar la expresión
+                            value = sp.simplify(value)
+                            # Si es numérico, convertir a float con 5 decimales
                             if value.is_number:
                                 num_val = float(sp.N(value))
-                                if abs(num_val) < 1e-12:
-                                    num_val = 0.0
-                                float_sol[str(var)] = num_val
+                                # **CORRECCIÓN CRÍTICA: En modo DEG, NO convertir radianes a grados**
+                                # Porque en el parseo ya convertimos sin(x) a sin(x*pi/180)
+                                # Así que la solución para x ya está en grados
+                                symbolic_sol[str(var)] = round(num_val, 5)
                             else:
-                                float_sol[str(var)] = str(value)
+                                symbolic_sol[str(var)] = str(value)
                         except:
-                            float_sol[str(var)] = str(value)
+                            symbolic_sol[str(var)] = str(value)
                     
                     result.append({
-                        "solution": float_sol,
+                        "solution": symbolic_sol,
                         "method": "simbólica",
                         "error": 0.0
                     })
                 
                 print("Solución simbólica encontrada")
                 return result
+                
         except Exception as e:
             print(f"Solución simbólica falló: {e}")
+        
         return None
     
     def try_fsolve(self, var_list, equations_func):
@@ -434,11 +559,14 @@ class AdvancedEquationSolver:
                         error = np.linalg.norm(residuals)
                         
                         if error < 1e-6:
-                            sol_dict = {var: float(val) for var, val in zip(var_list, x_sol)}
+                            sol_dict = {}
+                            for var, val in zip(var_list, x_sol):
+                                # Redondear a 5 decimales
+                                sol_dict[var] = round(float(val), 5)
                             solutions.append({
                                 "solution": sol_dict,
                                 "method": "fsolve",
-                                "error": error
+                                "error": round(error, 10)
                             })
                             print(f"fsolve encontró solución con error: {error}")
             except TimeoutError:
@@ -466,11 +594,14 @@ class AdvancedEquationSolver:
                     if result.success:
                         error = np.linalg.norm(result.fun)
                         if error < 1e-6:
-                            sol_dict = {var: float(val) for var, val in zip(var_list, result.x)}
+                            sol_dict = {}
+                            for var, val in zip(var_list, result.x):
+                                # Redondear a 5 decimales
+                                sol_dict[var] = round(float(val), 5)
                             solutions.append({
                                 "solution": sol_dict,
                                 "method": f"root-{method}",
-                                "error": error
+                                "error": round(error, 10)
                             })
                             print(f"root-{method} encontró solución con error: {error}")
                 except Exception as e:
@@ -495,11 +626,14 @@ class AdvancedEquationSolver:
                     if result.success:
                         error = np.linalg.norm(result.fun)
                         if error < 1e-6:
-                            sol_dict = {var: float(val) for var, val in zip(var_list, result.x)}
+                            sol_dict = {}
+                            for var, val in zip(var_list, result.x):
+                                # Redondear a 5 decimales
+                                sol_dict[var] = round(float(val), 5)
                             solutions.append({
                                 "solution": sol_dict,
                                 "method": f"root-{method}",
-                                "error": error
+                                "error": round(error, 10)
                             })
                             print(f"root-{method} encontró solución con error: {error}")
                 except Exception as e:
@@ -555,11 +689,14 @@ class AdvancedEquationSolver:
                 
                 error = np.linalg.norm(equations_func(x))
                 if error < 1e-6:
-                    sol_dict = {var: float(val) for var, val in zip(var_list, x)}
+                    sol_dict = {}
+                    for var, val in zip(var_list, x):
+                        # Redondear a 5 decimales
+                        sol_dict[var] = round(float(val), 5)
                     solutions.append({
                         "solution": sol_dict,
                         "method": "newton",
-                        "error": error
+                        "error": round(error, 10)
                     })
                     print(f"Newton encontró solución con error: {error}")
             except Exception as e:
@@ -591,11 +728,14 @@ class AdvancedEquationSolver:
                 if result.success:
                     error = np.linalg.norm(result.fun)
                     if error < 1e-4:
-                        sol_dict = {var: float(val) for var, val in zip(var_list, result.x)}
+                        sol_dict = {}
+                        for var, val in zip(var_list, result.x):
+                            # Redondear a 5 decimales
+                            sol_dict[var] = round(float(val), 5)
                         solutions.append({
                             "solution": sol_dict,
                             "method": "mínimos cuadrados",
-                            "error": error
+                            "error": round(error, 10)
                         })
                         print(f"Mínimos cuadrados encontró solución con error: {error}")
             except Exception as e:
@@ -611,13 +751,27 @@ class AdvancedEquationSolver:
         
         for sol in solutions:
             is_unique = True
-            sol_vector = np.array([sol["solution"][var] for var in sorted(sol["solution"].keys())])
             
-            for uniq in unique:
-                uniq_vector = np.array([uniq["solution"][var] for var in sorted(uniq["solution"].keys())])
-                if np.linalg.norm(sol_vector - uniq_vector) < tolerance:
-                    is_unique = False
-                    break
+            # Para soluciones simbólicas, comparar representación de cadena
+            if "parametric" in sol or any(isinstance(v, str) and "libre" in v for v in sol["solution"].values()):
+                sol_str = str(sorted(sol["solution"].items()))
+                for uniq in unique:
+                    uniq_str = str(sorted(uniq["solution"].items()))
+                    if sol_str == uniq_str:
+                        is_unique = False
+                        break
+            else:
+                # Para soluciones numéricas, comparar vectores
+                sol_vector = np.array([sol["solution"][var] for var in sorted(sol["solution"].keys())])
+                
+                for uniq in unique:
+                    if "parametric" in uniq or any(isinstance(v, str) and "libre" in v for v in uniq["solution"].values()):
+                        continue
+                    
+                    uniq_vector = np.array([uniq["solution"][var] for var in sorted(uniq["solution"].keys())])
+                    if np.linalg.norm(sol_vector - uniq_vector) < tolerance:
+                        is_unique = False
+                        break
             
             if is_unique:
                 unique.append(sol)
@@ -637,6 +791,60 @@ check_timer = None
 status_timer = None
 
 solver = AdvancedEquationSolver()
+
+def extract_equations_with_comments(text: str):
+    """
+    Extrae ecuaciones ignorando comentarios.
+    Retorna:
+    - equations: lista de ecuaciones limpias (sin comentarios)
+    - comments: lista de comentarios encontrados
+    """
+    equations = []
+    comments = []
+    
+    for line_num, line in enumerate(text.split('\n'), 1):
+        line = line.rstrip()
+        
+        # Si la línea está vacía o es solo espacios
+        if not line.strip():
+            continue
+            
+        # Si la línea es un comentario completo (empieza con #)
+        if line.strip().startswith('#'):
+            comments.append({
+                'line': line_num,
+                'text': line.strip(),
+                'type': 'full'
+            })
+            continue
+            
+        # Si hay un comentario dentro de la línea
+        if '#' in line:
+            # Dividir en ecuación y comentario
+            parts = line.split('#', 1)
+            eq_part = parts[0].strip()
+            comment_part = parts[1].strip()
+            
+            # Agregar la ecuación si tiene contenido
+            if eq_part:
+                equations.append(eq_part)
+                comments.append({
+                    'line': line_num,
+                    'text': f"# {comment_part}",
+                    'type': 'inline'
+                })
+            else:
+                # Solo comentario
+                comments.append({
+                    'line': line_num,
+                    'text': f"# {comment_part}",
+                    'type': 'full'
+                })
+        else:
+            # Línea sin comentarios
+            equations.append(line.strip())
+    
+    return equations, comments
 
 # CSS mejorado con animación para métodos activos
 ui.add_head_html('''
@@ -903,6 +1111,15 @@ ui.add_head_html('''
         margin-left: 4px;
     }
     
+    .symbolic-var {
+        color: #dc2626;
+        font-style: italic;
+        background: #fef2f2;
+        padding: 2px 6px;
+        border-radius: 4px;
+        border: 1px dashed #fecaca;
+    }
+    
     .solution-info {
         margin-top: 12px;
         padding-top: 12px;
@@ -1164,6 +1381,75 @@ ui.add_head_html('''
         margin-right: 8px;
         font-weight: 500;
     }
+    
+    .symbolic-note {
+        background: #f0f9ff;
+        border: 1px solid #bae6fd;
+        border-radius: 8px;
+        padding: 12px;
+        margin-top: 16px;
+        font-size: 12px;
+        color: #0369a1;
+    }
+    
+    .symbolic-note-title {
+        font-weight: 600;
+        margin-bottom: 4px;
+    }
+    
+    .decimal-value {
+        color: #059669;
+        font-weight: 500;
+        font-family: 'SF Mono', monospace;
+    }
+    
+    /* Estilos para texto de comentario */
+    .comment-text {
+        color: #888888;
+        font-style: italic;
+        background-color: #f8f9fa;
+        border-left: 3px solid #dee2e6;
+        padding-left: 8px;
+        margin: 2px 0;
+        font-family: 'SF Mono', monospace;
+    }
+    
+    /* Estilos para la información de comentarios */
+    .comment-info {
+        background: #f8f9fa;
+        border: 1px solid #e9ecef;
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 12px;
+        font-size: 12px;
+        color: #666;
+    }
+    
+    .comment-info-title {
+        font-weight: 600;
+        margin-bottom: 4px;
+        color: #495057;
+    }
+    
+    .comment-stats {
+        display: flex;
+        gap: 16px;
+        font-size: 11px;
+    }
+    
+    .comment-stat {
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .comment-stat-label {
+        color: #6c757d;
+    }
+    
+    .comment-stat-value {
+        font-weight: 600;
+        color: #495057;
+    }
 </style>
 ''')
 
@@ -1196,11 +1482,44 @@ with ui.element('div').classes('app-container'):
             with ui.element('div').classes('panel-body'):
                 with ui.element('div').classes('equation-box'):
                     equation_area = ui.textarea(
-                        value='sin(30) = 0.5\ncos(x) = 0.5',
+                        value='''# Sistema de ecuaciones lineales
+x + y = 10  # Suma de x e y es 10
+x - y = 2   # Diferencia de x e y es 2
+
+# Ejemplo de ecuación trigonométrica en modo RAD
+# sin(x) toma x en radianes
+sin(x) = 0.5
+
+# Ejemplo con operación simbólica
+diff(sin(x), x) = cos(x)''',
                         placeholder='''UNA ECUACIÓN POR LÍNEA
+
+SINTAXIS DE COMENTARIOS:
+------------------------
+# Esto es un comentario de línea completa
+x + y = 10  # Esto es un comentario inline
+
+Los comentarios se ignoran completamente durante el análisis.
 
 IMPORTANTE: En modo DEG (grados), las constantes en funciones trigonométricas se interpretan como grados.
 Ejemplo: sin(30) se interpreta como 30 grados en modo DEG.
+
+OPERACIONES SIMBÓLICAS:
+-----------------------
+Integrales: integral(x^2, x)
+Integral definida: integral(x^2, (x, 0, 1))
+Derivadas: diff(sin(x), x)
+Derivadas múltiples: diff(x^3, x, 2)
+Sumatorias: sum(i^2, (i, 1, n))
+Productorias: product(i, (i, 1, n))
+
+NOTA: Las ecuaciones con operaciones simbólicas se resuelven solo simbólicamente.
+
+REGLAS DEL SISTEMA:
+-------------------
+1. Si hay operaciones simbólicas (integrales, derivadas, etc.) → solo solución simbólica
+2. Si hay más variables que ecuaciones → sistema indeterminado (solución paramétrica)
+3. Para solución numérica: igual número de ecuaciones y variables
 
 SINTAXIS FUNCIONAL:
 -------------------
@@ -1218,17 +1537,12 @@ Constantes: pi, e, inf
 Funciones especiales: gamma(x), factorial(x), erf(x), erfc(x)
 Mín/Max: min(x,y), max(x,y)
 
-CÁLCULO:
-Integrales: integral(x^2, x)
-Integral definida: integral(x^2, (x, 0, 1))
-Sumatorias: sum(i^2, (i, 1, n))
-Productorias: product(i, (i, 1, n))
-
 EJEMPLOS:
 x^2 + y^2 = 25
 sin(x) + cos(y) = 1
 exp(x) - log(y) = 2
 diff(sin(x), x) = cos(x)
+integral(x^2, x) = x^3/3
 min(x, y) = 5
 max(x, y, z) = 10''',
                         on_change=lambda e: update_equation_info()
@@ -1245,11 +1559,11 @@ max(x, y, z) = 10''',
                 results_container = ui.element('div').classes('results-box')
 
 def update_equation_info():
-    """Actualiza la información sobre las ecuaciones"""
-    eq_texts = [line.strip() for line in equation_area.value.split('\n') if line.strip()]
+    """Actualiza la información sobre las ecuaciones, ignorando comentarios"""
+    equations, comments = extract_equations_with_comments(equation_area.value)
     var_set = set()
     
-    for eq in eq_texts:
+    for eq in equations:
         eq_clean = eq.lower()
         funcs = ['sin', 'cos', 'tan', 'cot', 'sec', 'csc',
                 'asin', 'acos', 'atan', 'acot', 'asec', 'acsc',
@@ -1269,7 +1583,7 @@ def update_equation_info():
     
     variables = [v for v in var_set if len(v) == 1]
     
-    equation_info.text = f'{len(eq_texts)} ecuaciones, {len(variables)} variables'
+    equation_info.text = f'{len(equations)} ecuaciones, {len(variables)} variables, {len(comments)} comentarios'
 
 def toggle_angle_mode():
     """Alterna entre modo grados y radianes"""
@@ -1372,8 +1686,24 @@ def update_results(result):
                 ui.label(result["error"]).classes('error-message')
     else:
         with results_container:
+            # Mostrar información de comentarios
+            equations, comments = extract_equations_with_comments(equation_area.value)
+            if comments:
+                with ui.element('div').classes('comment-info'):
+                    ui.label('📝 Comentarios detectados').classes('comment-info-title')
+                    with ui.element('div').classes('comment-stats'):
+                        with ui.element('div').classes('comment-stat'):
+                            ui.label('Comentarios totales').classes('comment-stat-label')
+                            ui.label(str(len(comments))).classes('comment-stat-value')
+                        with ui.element('div').classes('comment-stat'):
+                            ui.label('Ecuaciones válidas').classes('comment-stat-label')
+                            ui.label(str(len(equations))).classes('comment-stat-value')
+                        with ui.element('div').classes('comment-stat'):
+                            ui.label('Modo actual').classes('comment-stat-label')
+                            ui.label(angle_mode.upper()).classes('comment-stat-value')
+            
             with ui.element('div').classes('stats-box'):
-                ui.label('ESTADÍSTICAS').classes('stats-title')
+                ui.label('ESTADÍSTICAS DE SOLUCIÓN').classes('stats-title')
                 with ui.element('div').classes('stats-grid'):
                     with ui.element('div').classes('stat-item'):
                         ui.label('Soluciones').classes('stat-label')
@@ -1396,10 +1726,21 @@ def update_results(result):
                         ui.label('Modo').classes('stat-label')
                         ui.label(angle_mode.upper()).classes('stat-value')
             
+            # Mostrar nota si es simbólico o indeterminado
+            if result.get('symbolic_mode') or result.get('indeterminate'):
+                with ui.element('div').classes('symbolic-note'):
+                    if result.get('symbolic_mode'):
+                        ui.label('🔬 Modo Simbólico').classes('symbolic-note-title')
+                        ui.label('Las ecuaciones contienen operaciones simbólicas (integrales, derivadas, etc.). Solo se aplican métodos simbólicos.')
+                    elif result.get('indeterminate'):
+                        ui.label('∞ Sistema Indeterminado').classes('symbolic-note-title')
+                        ui.label('Más variables que ecuaciones. Se muestran soluciones paramétricas.')
+            
             for i, solution_data in enumerate(result["solutions"]):
                 solution = solution_data.get("solution", {})
                 method = solution_data.get("method", "desconocido")
                 error = solution_data.get("error", 0.0)
+                is_parametric = solution_data.get("parametric", False)
                 
                 with ui.element('div').classes('solution-card'):
                     with ui.element('div').classes('solution-header'):
@@ -1415,23 +1756,50 @@ def update_results(result):
                                 ui.label(var).classes('var-name')
                                 ui.label('=').classes('var-equals')
                                 
+                                # Determinar si es valor numérico o expresión simbólica
                                 if isinstance(value, (int, float)):
+                                    # Formatear con 5 decimales
                                     formatted = f"{value:.5f}"
-                                    if formatted == "-0.00000":
-                                        formatted = "0.00000"
+                                    if formatted.endswith('.00000'):
+                                        # Si es entero, mostrar sin decimales
+                                        formatted = f"{int(value)}"
+                                    elif formatted == "-0.00000":
+                                        formatted = "0"
+                                    ui.label(formatted).classes('decimal-value')
                                 else:
-                                    formatted = str(value)
-                                
-                                ui.label(formatted).classes('var-value')
+                                    # Verificar si es variable libre
+                                    if "libre" in str(value):
+                                        ui.label(str(value)).classes('symbolic-var')
+                                    else:
+                                        # Es expresión simbólica
+                                        ui.label(str(value)).classes('symbolic-var')
                     
                     with ui.element('div').classes('solution-info'):
-                        ui.label(f'Método: {method} | Error: {error:.2e} | Modo: {angle_mode.upper()}')
+                        if is_parametric:
+                            ui.label(f'✓ Solución paramétrica | Método: {method} | Modo: {angle_mode.upper()}')
+                        else:
+                            if isinstance(error, (int, float)):
+                                # Formatear error
+                                if error == 0.0:
+                                    error_str = "0.00"
+                                else:
+                                    error_str = f"{error:.2e}"
+                                ui.label(f'Método: {method} | Error: {error_str} | Modo: {angle_mode.upper()}')
+                            else:
+                                ui.label(f'Método: {method} | Modo: {angle_mode.upper()}')
 
-def solve_in_background(eq_texts):
+def solve_in_background(text):
     """Función que se ejecuta en el hilo de fondo"""
     try:
-        print(f"Iniciando resolución de {len(eq_texts)} ecuaciones...")
+        # Extraer ecuaciones ignorando comentarios
+        eq_texts, comments = extract_equations_with_comments(text)
+        
+        print(f"Iniciando resolución de {len(eq_texts)} ecuaciones (ignorando {len(comments)} comentarios)...")
         print(f"Modo ángulo actual del solver: {solver.angle_mode}")
+        
+        if not eq_texts:
+            result_queue.put({"error": "No hay ecuaciones válidas para resolver (solo hay comentarios)"})
+            return
         
         methods_order = [
             "simbólica",
@@ -1498,15 +1866,18 @@ def solve_equations():
             return
         is_solving = True
     
-    eq_texts = [line.strip() for line in equation_area.value.split('\n') if line.strip()]
+    # Extraer ecuaciones ignorando comentarios
+    eq_texts, comments = extract_equations_with_comments(equation_area.value)
     
     if not eq_texts:
-        ui.notify('No hay ecuaciones para resolver', type='warning')
+        ui.notify('No hay ecuaciones válidas para resolver (solo hay comentarios)', type='warning')
         with solving_lock:
             is_solving = False
         return
     
     print(f"Iniciando resolución de {len(eq_texts)} ecuaciones en modo {angle_mode}...")
+    print(f"Comentarios ignorados: {len(comments)}")
+    
     play_btn.classes('loading')
     
     current_method_index = 0
@@ -1529,7 +1900,7 @@ def solve_equations():
         status_timer.deactivate()
         status_timer = None
     
-    thread = threading.Thread(target=solve_in_background, args=(eq_texts,), daemon=True)
+    thread = threading.Thread(target=solve_in_background, args=(equation_area.value,), daemon=True)
     thread.start()
     
     check_timer = ui.timer(0.5, check_result)
