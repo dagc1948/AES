@@ -14,7 +14,7 @@ Una aplicación web avanzada para resolver sistemas de ecuaciones algebraicas, t
 * **DEG (Grados):** Conversión automática de constantes trigonométricas (ej: `sin(30)` = 0.5).
 * **Cambio dinámico:** Alterna entre modos con un solo clic sin perder datos.
 
-### 📐 Soporte Matemático Completo
+###  Soporte Matemático Completo
 * **Álgebra:** Ecuaciones polinómicas, racionales e irracionales.
 * **Trigonometría:** Funciones directas, inversas e hiperbólicas.
 * **Cálculo:** Derivadas, integrales, sumatorias y productorias.
@@ -85,7 +85,7 @@ x^2 + y^2 = 25
 
 ---
 
-## 📄 Licencia
+##  Licencia
 
 Este proyecto está bajo la Licencia MIT.
 
